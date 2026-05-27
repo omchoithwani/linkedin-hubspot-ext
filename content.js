@@ -1,195 +1,215 @@
-(() => {
+// Runs as an async IIFE so chrome.scripting.executeScript awaits the Promise.
+(async () => {
   const url = window.location.href;
   const cleanUrl = url.split('?')[0].replace(/\/$/, '');
 
-  function getText(selectors) {
+  // ── Utilities ──────────────────────────────────────────────────────────────
+
+  // Poll for a selector up to `timeout` ms, resolve with element or null.
+  function waitFor(selector, timeout = 5000) {
+    return new Promise((resolve) => {
+      const el = document.querySelector(selector);
+      if (el) return resolve(el);
+      const start = Date.now();
+      const timer = setInterval(() => {
+        const found = document.querySelector(selector);
+        if (found) { clearInterval(timer); return resolve(found); }
+        if (Date.now() - start >= timeout) { clearInterval(timer); resolve(null); }
+      }, 150);
+    });
+  }
+
+  function nodeText(el) {
+    if (!el) return null;
+    return (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ') || null;
+  }
+
+  function firstMatch(selectors) {
     for (const sel of selectors) {
       try {
         const el = document.querySelector(sel);
-        if (el) {
-          const text = (el.innerText || el.textContent || el.getAttribute('content') || '').trim();
-          if (text) return text;
-        }
+        const t = nodeText(el);
+        if (t) return t;
       } catch (_) {}
     }
     return null;
   }
 
-  function isCompanyPage() {
-    return /linkedin\.com\/company\//i.test(url);
-  }
+  // ── Mode detection ─────────────────────────────────────────────────────────
 
-  function isContactPage() {
-    return /linkedin\.com\/in\//i.test(url);
-  }
+  const isCompany = /linkedin\.com\/company\//i.test(url);
+  const isContact = /linkedin\.com\/in\//i.test(url);
 
-  function scrapeCompany() {
-    const name = getText([
+  // ── Company scraper ────────────────────────────────────────────────────────
+
+  async function scrapeCompany() {
+    // Wait until the page title renders
+    await waitFor('h1');
+
+    const name = firstMatch([
       'h1.org-top-card-summary__title',
+      '.org-top-card-summary__title',
       'h1[class*="org-top-card"]',
-      'h1',
-      'meta[property="og:title"]'
+      'h1'
     ]);
-    console.log('[LI→HS] company name:', name);
+    console.log('[LI→HS] name:', name);
 
-    // Website: look in the about section for external links
+    // ── Website ──
+    // LinkedIn company pages render website in the About section.
+    // Selector priorities: data attribute → known class → any external link near "about" content.
     let website = null;
-    const aboutLinks = document.querySelectorAll(
-      'a[data-field="website"], ' +
-      '.org-about-company-module__website a, ' +
-      'a[href*="://"][data-tracking-control-name*="about_website"], ' +
-      '.link-without-visited-state[target="_blank"]'
-    );
-    for (const link of aboutLinks) {
-      const href = link.getAttribute('href') || '';
-      if (href && !href.includes('linkedin.com') && href.startsWith('http')) {
-        website = href.split('?')[0];
+
+    const websiteCandidates = [
+      ...document.querySelectorAll(
+        'a[data-field="website"], ' +
+        '.org-about-company-module__website a, ' +
+        'a[data-tracking-control-name*="website"], ' +
+        '.org-page-details__definition-text a[href^="http"]'
+      )
+    ];
+
+    for (const a of websiteCandidates) {
+      const href = (a.getAttribute('href') || '').split('?')[0];
+      if (href.startsWith('http') && !href.includes('linkedin.com')) {
+        website = href;
         break;
       }
     }
 
-    // Fallback: scan all external links in about section
+    // Fallback: any external <a> whose ancestor has "about" in its class/id
     if (!website) {
-      const section = document.querySelector(
-        '.org-about-us-organization-description, .org-page-details-module, section[data-member-id]'
-      );
-      if (section) {
-        const links = section.querySelectorAll('a[href^="http"]');
-        for (const link of links) {
-          const href = link.getAttribute('href') || '';
-          if (!href.includes('linkedin.com')) {
-            website = href.split('?')[0];
-            break;
-          }
+      for (const a of document.querySelectorAll('a[href^="http"]')) {
+        const href = (a.getAttribute('href') || '').split('?')[0];
+        if (!href.includes('linkedin.com') && a.closest('[class*="about"],[id*="about"]')) {
+          website = href;
+          break;
         }
       }
     }
 
-    // Broader fallback: any external link that looks like a company website
+    // Fallback: <dd> elements that contain a plain URL text (About tab layout)
     if (!website) {
-      const allLinks = document.querySelectorAll('a[href^="http"]');
-      for (const link of allLinks) {
-        const href = link.getAttribute('href') || '';
-        if (
-          !href.includes('linkedin.com') &&
-          !href.includes('google.com') &&
-          !href.includes('facebook.com') &&
-          !href.includes('twitter.com') &&
-          link.closest('[class*="about"]')
-        ) {
-          website = href.split('?')[0];
-          break;
+      for (const dd of document.querySelectorAll('dd')) {
+        const t = nodeText(dd);
+        if (t && /^https?:\/\//.test(t)) { website = t; break; }
+        // Or a child anchor
+        const a = dd.querySelector('a[href^="http"]');
+        if (a) {
+          const href = (a.getAttribute('href') || '').split('?')[0];
+          if (!href.includes('linkedin.com')) { website = href; break; }
         }
       }
     }
 
     console.log('[LI→HS] website:', website);
 
-    return {
-      mode: 'company',
-      name: name || null,
-      linkedinUrl: cleanUrl,
-      website: website || null
-    };
+    return { mode: 'company', name: name || null, linkedinUrl: cleanUrl, website: website || null };
   }
 
-  function scrapeContact() {
-    // Full name from h1
-    const fullName = getText([
+  // ── Contact scraper ────────────────────────────────────────────────────────
+
+  async function scrapeContact() {
+    // Wait for the name heading — signals the profile has rendered
+    await waitFor('h1.text-heading-xlarge, h1[class*="text-heading"], h1', 6000);
+
+    // ── Name ──
+    const fullName = firstMatch([
       'h1.text-heading-xlarge',
       'h1[class*="text-heading"]',
-      '.pv-top-card--list .text-heading-xlarge',
       'h1'
     ]);
-    console.log('[LI→HS] full name:', fullName);
+    console.log('[LI→HS] fullName:', fullName);
 
-    let firstName = null;
-    let lastName = null;
+    let firstName = null, lastName = null;
     if (fullName) {
       const parts = fullName.trim().split(/\s+/);
       firstName = parts[0] || null;
       lastName = parts.length > 1 ? parts.slice(1).join(' ') : null;
     }
 
-    // Email: only from contact info modal if already open / visible
+    // ── Email (only if a mailto: link is already visible) ──
     let email = null;
-    const mailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
-    for (const link of mailtoLinks) {
-      const addr = link.getAttribute('href').replace('mailto:', '').split('?')[0].trim();
-      if (addr && addr.includes('@')) {
-        email = addr;
-        break;
-      }
+    for (const a of document.querySelectorAll('a[href^="mailto:"]')) {
+      const addr = a.getAttribute('href').replace(/^mailto:/i, '').split('?')[0].trim();
+      if (addr.includes('@')) { email = addr; break; }
     }
     console.log('[LI→HS] email:', email);
 
-    // Current company: first experience entry
+    // ── Current company ──
+    // Strategy 1: experience section — find the #experience anchor, then walk
+    // its nearest parent section/div to find the first list item.
     let company = null;
-    const expSelectors = [
-      // Newer LinkedIn layout
-      '#experience ~ .pvs-list__outer-container .pvs-list__item--line-separated:first-child .t-14.t-normal.t-black',
-      '#experience + * .pvs-list__item--line-separated:first-child span[aria-hidden="true"]',
-      // Experience section company name
-      '.pv-entity__secondary-title.pv-entity__company-summary-info',
-      '.pv-profile-section__card-item:first-child .pv-entity__secondary-title',
-      // Fallback: top card current company
-      '.pv-top-card--experience-list-item .pv-entity__secondary-title',
-      '.inline-show-more-text--is-collapsed span[aria-hidden="true"]'
-    ];
 
-    for (const sel of expSelectors) {
-      try {
-        const els = document.querySelectorAll(sel);
-        for (const el of els) {
-          const text = (el.innerText || el.textContent || '').trim();
-          // Skip titles that are position names — look for company-like text
-          if (text && text.length < 100 && !text.includes('\n')) {
-            company = text;
+    const expAnchor = document.querySelector('#experience');
+    if (expAnchor) {
+      // The anchor is usually inside or just before the section container.
+      // Walk up to find a container that holds a <ul> or <li> list.
+      let container = expAnchor.parentElement;
+      for (let i = 0; i < 5 && container && !container.querySelector('li'); i++) {
+        container = container.parentElement;
+      }
+
+      const firstLi = container && container.querySelector('li');
+      if (firstLi) {
+        // Each list item has several span[aria-hidden="true"]:
+        //   [0] = job title
+        //   [1] = company name (may include " · Full-time" etc.)
+        //   [2] = date range
+        //   [3] = duration
+        // For a grouped entry (multiple roles at same company) the order differs.
+        const spans = [...firstLi.querySelectorAll('span[aria-hidden="true"]')]
+          .map(s => s.textContent.trim())
+          .filter(t => t.length > 0);
+
+        // Find the first span that looks like a company (not a date/duration/title)
+        // Company spans often contain " · " (e.g. "Acme Corp · Full-time")
+        // or are simply a company name on its own.
+        for (let i = 0; i < spans.length; i++) {
+          const t = spans[i];
+          // Skip if it's clearly a date range
+          if (/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b.*\d{4}/.test(t)) continue;
+          // Skip very short tokens (month names, years on their own)
+          if (t.length < 2) continue;
+          // Skip duration strings like "2 yrs 3 mos"
+          if (/^\d+\s+(yr|mo)/.test(t)) continue;
+
+          // If it has a bullet separator, take what's before " · "
+          if (t.includes(' · ')) {
+            company = t.split(' · ')[0].trim();
+            break;
+          }
+          // Otherwise use it directly — but only if index > 0 (skip the title at [0])
+          if (i > 0) {
+            company = t;
             break;
           }
         }
-        if (company) break;
-      } catch (_) {}
-    }
-
-    // Fallback: look for experience section structure
-    if (!company) {
-      try {
-        const expSection = document.querySelector('#experience');
-        if (expSection) {
-          // Walk siblings to find the list
-          let sibling = expSection.nextElementSibling;
-          while (sibling && !company) {
-            const items = sibling.querySelectorAll('li');
-            if (items.length > 0) {
-              const firstItem = items[0];
-              // Company name is usually the second span[aria-hidden] in the item
-              const spans = firstItem.querySelectorAll('span[aria-hidden="true"]');
-              for (let i = 1; i < spans.length; i++) {
-                const txt = spans[i].textContent.trim();
-                if (txt && !txt.includes('·') && txt.length > 1) {
-                  company = txt;
-                  break;
-                }
-              }
-            }
-            sibling = sibling.nextElementSibling;
-          }
-        }
-      } catch (_) {}
-    }
-
-    // Last fallback: subtitle under name on top card
-    if (!company) {
-      const subtitle = getText([
-        '.pv-top-card--experience-list .pv-entity__secondary-title',
-        '.top-card-layout__headline',
-        '.text-body-medium.break-words'
-      ]);
-      // These usually say "Title at Company" — try to extract company after " at "
-      if (subtitle && subtitle.includes(' at ')) {
-        company = subtitle.split(' at ').pop().trim();
       }
+    }
+
+    // Strategy 2: headline text — "Title at Company"
+    if (!company) {
+      const headline = firstMatch([
+        '.text-body-medium.break-words',
+        '.top-card-layout__headline',
+        '.pv-top-card--experience-list .pv-entity__secondary-title'
+      ]);
+      if (headline) {
+        // "Senior Engineer at Acme" → "Acme"
+        // "Senior Engineer at Acme · Full-time" → "Acme"
+        const atMatch = headline.match(/\bat\s+(.+?)(?:\s*[·|]\s*.*)?$/i);
+        if (atMatch) company = atMatch[1].trim();
+      }
+      console.log('[LI→HS] headline fallback:', headline, '→ company:', company);
+    }
+
+    // Strategy 3: top-card experience pills
+    if (!company) {
+      const pill = firstMatch([
+        '.pv-top-card--experience-list-item span[aria-hidden="true"]',
+        '.pv-top-card-v2-ctas .pv-entity__secondary-title'
+      ]);
+      if (pill) company = pill;
     }
 
     console.log('[LI→HS] company:', company);
@@ -204,7 +224,9 @@
     };
   }
 
-  if (isCompanyPage()) return scrapeCompany();
-  if (isContactPage()) return scrapeContact();
+  // ── Dispatch ───────────────────────────────────────────────────────────────
+
+  if (isCompany) return scrapeCompany();
+  if (isContact) return scrapeContact();
   return { mode: 'unknown' };
 })();
