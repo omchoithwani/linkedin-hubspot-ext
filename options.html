@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LinkedIn → HubSpot · Settings</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="options-body">
+
+<div class="options-header">
+  <div class="logo">in</div>
+  <span class="options-title">LinkedIn → HubSpot Settings</span>
+</div>
+
+<div class="form-group">
+  <label class="form-label" for="tokenInput">HubSpot Private App Token</label>
+  <input
+    class="form-input"
+    type="password"
+    id="tokenInput"
+    placeholder="pat-na1-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    autocomplete="off"
+    spellcheck="false"
+  />
+  <div class="form-hint">
+    Create a Private App in HubSpot with scopes:
+    <code>crm.objects.contacts.read/write</code> and
+    <code>crm.objects.companies.read/write</code>.
+  </div>
+</div>
+
+<div>
+  <button class="btn-save" id="saveBtn">Save</button>
+  <span class="save-status" id="saveStatus">Saved ✓</span>
+</div>
+
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn → HubSpot",
+  "version": "1.0.0",
+  "description": "Scrape LinkedIn profiles and add them to HubSpot CRM with one click.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "*://*.linkedin.com/*",
+    "*://*.hubspot.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LinkedIn → HubSpot"
+  },
+  "options_page": "options.html",
+  "content_scripts": [],
+  "icons": {}
+}
