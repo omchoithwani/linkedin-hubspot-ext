@@ -110,10 +110,10 @@
     let company = null;
 
     // Strategy 1: walk the #experience section → first list item → span texts
+    let jobTitle = null;
     try {
       const anchor = document.querySelector('#experience');
       if (anchor) {
-        // The anchor lives inside a heading div; its parent/grandparent holds the list
         let node = anchor.parentElement;
         for (let i = 0; i < 6 && node; i++) {
           const li = node.querySelector(
@@ -124,14 +124,37 @@
               .map(s => s.textContent.trim())
               .filter(Boolean);
 
-            for (let j = 0; j < spans.length; j++) {
-              const t = spans[j];
-              // Skip date ranges and durations
-              if (/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/.test(t)) continue;
-              if (/^\d+\s+(yr|mo|yr|mos)/.test(t)) continue;
-              if (t.length < 2) continue;
-              if (t.includes(' · ')) { company = t.split(' · ')[0].trim(); break; }
-              if (j > 0) { company = t; break; }   // first span is always the job title
+            // LinkedIn has two list-item shapes:
+            //
+            // Single role:
+            //   spans[0] = "Job Title"
+            //   spans[1] = "Company Name · Full-time"   (has " · " or is plain company)
+            //   spans[2] = "Jan 2020 - Present"
+            //
+            // Grouped (multiple roles at one company):
+            //   spans[0] = "Company Name"
+            //   spans[1] = "5 yrs 3 mos"               (duration — no " · ")
+            //   spans[2] = first role title
+            //
+            // Distinguish: if spans[1] looks like a duration/date → grouped.
+            const isDurationOrDate = t =>
+              /^\d+\s+(yr|mo)/.test(t) ||
+              /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/.test(t);
+
+            if (spans.length >= 2 && isDurationOrDate(spans[1])) {
+              // Grouped entry: spans[0] is the company name
+              company  = spans[0];
+              // First role title is in a nested sub-item
+              const subLi = li.querySelector('li');
+              if (subLi) {
+                const subSpans = [...subLi.querySelectorAll('span[aria-hidden="true"]')]
+                  .map(s => s.textContent.trim()).filter(Boolean);
+                if (subSpans[0]) jobTitle = subSpans[0];
+              }
+            } else if (spans.length >= 1) {
+              // Single-role entry: spans[0] is the job title
+              jobTitle = spans[0];
+              if (spans[1]) company = spans[1].split(' · ')[0].trim();
             }
             break;
           }
@@ -141,46 +164,53 @@
     } catch (_) {}
 
     // Strategy 2: headline under name  →  "Title at Company"
-    if (!company) {
+    if (!company || !jobTitle) {
       const headline = firstText(
         '.text-body-medium.break-words',
         '.ph5 .text-body-medium',
         '.top-card-layout__headline',
         '.pv-top-card--experience-list .pv-entity__secondary-title'
       );
-      if (headline) {
-        const m = headline.match(/\bat\s+(.+?)(?:\s*[·|•]\s*.*)?$/i);
-        if (m) company = m[1].trim();
-        else if (headline.includes(' at ')) company = headline.split(' at ').pop().trim();
+      if (headline && headline.includes(' at ')) {
+        const parts = headline.split(/ at /i);
+        if (!jobTitle) jobTitle = parts[0].trim();
+        if (!company)  company  = parts[parts.length - 1].replace(/\s*[·|•].*$/, '').trim();
+      } else if (headline && !jobTitle) {
+        jobTitle = headline;
       }
-      console.log('[LI→HS] headline:', headline, '→ company:', company);
+      console.log('[LI→HS] headline:', headline);
     }
 
     // Strategy 3: og:title  →  "Name | Title at Company | LinkedIn"
-    if (!company) {
+    if (!company || !jobTitle) {
       const og = metaContent('meta[property="og:title"]');
       if (og) {
-        const m = og.match(/\bat\s+([^|]+)/i);
-        if (m) company = m[1].trim();
+        // "Name | Title at Company | LinkedIn"
+        const segment = og.split('|')[1] || '';
+        if (segment.includes(' at ')) {
+          const parts = segment.split(/ at /i);
+          if (!jobTitle) jobTitle = parts[0].trim();
+          if (!company)  company  = parts[parts.length - 1].trim();
+        }
       }
     }
 
     // Strategy 4: meta description
-    if (!company) {
+    if (!company || !jobTitle) {
       const desc = metaContent('meta[name="description"], meta[property="og:description"]');
       if (desc) {
         const m = desc.match(/\bat\s+([^.,|]+)/i);
-        if (m) company = m[1].trim();
+        if (m && !company) company = m[1].trim();
       }
     }
 
-    console.log('[LI→HS] company:', company);
-    console.log('[LI→HS] email:', email);
+    console.log('[LI→HS] jobTitle:', jobTitle, '| company:', company, '| email:', email);
 
     return {
       mode: 'contact',
       firstName: firstName || null,
       lastName: lastName || null,
+      jobTitle: jobTitle || null,
       linkedinUrl: cleanUrl,
       email: email || null,
       company: company || null

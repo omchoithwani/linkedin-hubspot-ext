@@ -50,8 +50,9 @@ function buildRows(mode, data) {
   return [
     { label: 'First name',  value: data.firstName },
     { label: 'Last name',   value: data.lastName },
-    { label: 'Email',       value: data.email },
+    { label: 'Job title',   value: data.jobTitle },
     { label: 'Company',     value: data.company },
+    { label: 'Email',       value: data.email },
     { label: 'LinkedIn URL', value: data.linkedinUrl }
   ];
 }
@@ -80,7 +81,8 @@ async function createContact(token, data) {
     lastname:  data.lastName  || '',
     hs_linkedin_url: data.linkedinUrl || ''
   };
-  if (data.email) props.email = data.email;
+  if (data.email)    props.email    = data.email;
+  if (data.jobTitle) props.jobtitle = data.jobTitle;
 
   return hsRequest(token, 'POST', '/crm/v3/objects/contacts', { properties: props });
 }
